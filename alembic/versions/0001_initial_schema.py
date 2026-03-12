@@ -33,7 +33,7 @@ def upgrade() -> None:
     )
     op.create_index("ix_users_email", "users", ["email"])
 
-    op.execute("CREATE TYPE topicstatus AS ENUM ('active', 'paused', 'archived')")
+    op.execute("CREATE TYPE IF NOT EXISTS topicstatus AS ENUM ('active', 'paused', 'archived')")
 
     op.create_table(
         "topics",
@@ -86,7 +86,7 @@ def upgrade() -> None:
     )
     op.create_index("ix_check_results_topic_id", "check_results", ["topic_id"])
 
-    op.execute("CREATE TYPE notificationtype AS ENUM ('new_facts', 'topic_added', 'credits_low')")
+    op.execute("CREATE TYPE IF NOT EXISTS notificationtype AS ENUM ('new_facts', 'topic_added', 'credits_low')")
 
     op.create_table(
         "notifications",
