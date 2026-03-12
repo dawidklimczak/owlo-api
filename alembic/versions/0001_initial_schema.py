@@ -7,6 +7,7 @@ Create Date: 2026-03-11
 """
 from typing import Sequence, Union
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 from alembic import op
 
 
@@ -33,13 +34,6 @@ def upgrade() -> None:
     )
     op.create_index("ix_users_email", "users", ["email"])
 
-    op.execute("""
-DO $$ BEGIN
-    CREATE TYPE topicstatus AS ENUM ('active', 'paused', 'archived');
-EXCEPTION
-    WHEN duplicate_object THEN null;
-END $$;
-""")
 
     op.create_table(
         "topics",
@@ -53,7 +47,7 @@ END $$;
         sa.Column("next_check_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("last_checked_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("has_update", sa.Boolean(), nullable=False, server_default="false"),
-        sa.Column("status", sa.Enum("active", "paused", "archived", name="topicstatus", create_type=False), nullable=False, server_default="active"),
+        sa.Column("status", postgresql.ENUM("active", "paused", "archived", name="topicstatus", create_type=True), nullable=False, server_default="active"),
         sa.Column("source_language", sa.String(10), nullable=False, server_default="en"),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
@@ -92,20 +86,13 @@ END $$;
     )
     op.create_index("ix_check_results_topic_id", "check_results", ["topic_id"])
 
-    op.execute("""
-DO $$ BEGIN
-    CREATE TYPE notificationtype AS ENUM ('new_facts', 'topic_added', 'credits_low');
-EXCEPTION
-    WHEN duplicate_object THEN null;
-END $$;
-""")
 
     op.create_table(
         "notifications",
         sa.Column("id", sa.UUID(), nullable=False),
         sa.Column("user_id", sa.UUID(), nullable=False),
         sa.Column("topic_id", sa.UUID(), nullable=True),
-        sa.Column("type", sa.Enum("new_facts", "topic_added", "credits_low", name="notificationtype", create_type=False), nullable=False),
+        sa.Column("type", postgresql.ENUM("new_facts", "topic_added", "credits_low", name="notificationtype", create_type=True), nullable=False),
         sa.Column("sent_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("read_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
