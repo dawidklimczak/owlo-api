@@ -7,6 +7,8 @@ from app.models.topic import TopicStatus
 class TopicProposal(BaseModel):
     title: str
     description: str
+    search_keywords: list[str]
+    facts: list[str]
 
 
 class TopicAnalyzeRequest(BaseModel):
@@ -16,14 +18,11 @@ class TopicAnalyzeRequest(BaseModel):
 class TopicAnalyzeResponse(BaseModel):
     proposals: list[TopicProposal]
     source_language: str
-    extracted_content_preview: str
 
 
 class TopicConfirmRequest(BaseModel):
     url: str
-    title: str
-    description: str
-    source_language: str
+    proposal_index: int = 0
     check_interval_days: int | None = None
 
 

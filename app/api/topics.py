@@ -20,23 +20,24 @@ from app.schemas.topic import (
     TopicUpdateRequest,
 )
 from app.services.article_analyzer import (
-    extract_initial_facts,
     extract_topic_proposals,
     fetch_article_content,
-    generate_search_keywords,
 )
 from app.services.topic_checker import check_topic
 
 
 router = APIRouter()
 
+_proposals_cache: dict[tuple, dict] = {}
+CACHE_TTL_MINUTES = 10
 
-@router.post("/analyze", response_model=TopicAnalyzeResponse)
+
+@router.post("", response_model=TopicAnalyzeResponse)
 async def analyze_url(
     body: TopicAnalyzeRequest,
     current_user: User = Depends(get_current_user),
 ):
-    """Fetch article and return topic proposals for user to choose from."""
+    """Fetch article and return topic proposals (with keywords + facts) for user to choose from."""
     try:
         content = await fetch_article_content(body.url)
     except Exception:
@@ -56,59 +57,75 @@ async def analyze_url(
         )
 
     proposals = [TopicProposal(**p) for p in result.get("proposals", [])]
-    return TopicAnalyzeResponse(
-        proposals=proposals,
-        source_language=result.get("source_language", "en"),
-        extracted_content_preview=content[:500],
-    )
+    source_language = result.get("source_language", "en")
+
+    cache_key = (current_user.id, body.url)
+    _proposals_cache[cache_key] = {
+        "proposals": proposals,
+        "source_language": source_language,
+        "expires_at": datetime.now(timezone.utc) + timedelta(minutes=CACHE_TTL_MINUTES),
+    }
+
+    return TopicAnalyzeResponse(proposals=proposals, source_language=source_language)
 
 
-@router.post("", response_model=TopicResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/confirm", response_model=TopicResponse, status_code=status.HTTP_201_CREATED)
 async def confirm_topic(
     body: TopicConfirmRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Confirm a topic proposal and save it with initial facts."""
-    check_interval = body.check_interval_days or current_user.default_check_interval_days
+    """Confirm a cached proposal by index and save Topic + Facts."""
+    cache_key = (current_user.id, body.url)
+    cached = _proposals_cache.get(cache_key)
 
-    try:
-        content = await fetch_article_content(body.url)
-        keywords = await generate_search_keywords(body.title, body.description, body.source_language)
-        initial_facts_data = await extract_initial_facts(body.url, body.title, content)
-    except Exception as e:
+    if not cached or cached["expires_at"] < datetime.now(timezone.utc):
+        _proposals_cache.pop(cache_key, None)
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to process topic",
-            headers={"X-Error-Code": "PROCESSING_FAILED"},
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Proposals expired or not found. Please analyze the URL again.",
+            headers={"X-Error-Code": "PROPOSALS_EXPIRED"},
         )
+
+    proposals: list[TopicProposal] = cached["proposals"]
+    if body.proposal_index < 0 or body.proposal_index >= len(proposals):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid proposal index. Must be 0–{len(proposals) - 1}.",
+            headers={"X-Error-Code": "INVALID_PROPOSAL_INDEX"},
+        )
+
+    proposal = proposals[body.proposal_index]
+    source_language = cached["source_language"]
+    check_interval = body.check_interval_days or current_user.default_check_interval_days
 
     topic = Topic(
         user_id=current_user.id,
         source_url=body.url,
-        title=body.title,
-        description=body.description,
-        search_keywords=keywords,
+        title=proposal.title,
+        description=proposal.description,
+        search_keywords=proposal.search_keywords,
         check_interval_days=check_interval,
-        source_language=body.source_language,
+        source_language=source_language,
         next_check_at=datetime.now(timezone.utc) + timedelta(days=check_interval),
         status=TopicStatus.active,
     )
     db.add(topic)
     db.flush()
 
-    for fact_data in initial_facts_data:
+    for fact_content in proposal.facts:
         fact = Fact(
             topic_id=topic.id,
-            content=fact_data.get("content", ""),
+            content=fact_content,
             source_url=body.url,
-            source_title=fact_data.get("source_title", "Original article"),
+            source_title="Original article",
             is_initial=True,
         )
         db.add(fact)
 
     db.commit()
     db.refresh(topic)
+    _proposals_cache.pop(cache_key, None)
     return topic
 
 
