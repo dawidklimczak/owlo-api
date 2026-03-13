@@ -1,4 +1,5 @@
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -7,6 +8,8 @@ from openai import AsyncOpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 PROMPTS_DIR = Path(__file__).parent.parent / "prompts"
@@ -22,7 +25,8 @@ async def fetch_article_content(url: str) -> str:
     """Fetch article content using Tavily Extract, fallback to httpx + BeautifulSoup."""
     try:
         return await _fetch_via_tavily(url)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Tavily extract failed for {url}, falling back to httpx: {e}")
         return await _fetch_via_httpx(url)
 
 

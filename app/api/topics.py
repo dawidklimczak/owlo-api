@@ -1,8 +1,12 @@
+import logging
+import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
 
 from app.api.deps import get_current_user
 from app.config import settings
@@ -40,7 +44,8 @@ async def analyze_url(
     """Fetch article and return topic proposals (with keywords + facts) for user to choose from."""
     try:
         content = await fetch_article_content(body.url)
-    except Exception:
+    except Exception as e:
+        logger.error(f"fetch_article_content failed for {body.url}: {e}\n{traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Failed to fetch article content",
@@ -49,7 +54,8 @@ async def analyze_url(
 
     try:
         result = await extract_topic_proposals(body.url, content)
-    except Exception:
+    except Exception as e:
+        logger.error(f"extract_topic_proposals failed for {body.url}: {e}\n{traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to analyze article",
@@ -123,8 +129,17 @@ async def confirm_topic(
         )
         db.add(fact)
 
-    db.commit()
-    db.refresh(topic)
+    try:
+        db.commit()
+        db.refresh(topic)
+    except Exception as e:
+        logger.error(f"confirm_topic DB commit failed: {e}\n{traceback.format_exc()}")
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save topic",
+            headers={"X-Error-Code": "DB_ERROR"},
+        )
     _proposals_cache.pop(cache_key, None)
     return topic
 
