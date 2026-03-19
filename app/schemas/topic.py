@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, HttpUrl, field_validator
 from app.models.topic import TopicStatus
 
 
@@ -15,13 +15,28 @@ class TopicAnalyzeRequest(BaseModel):
     url: str
 
 
+class TopicManualRequest(BaseModel):
+    query: str
+
+    @field_validator("query")
+    @classmethod
+    def query_must_not_be_url(cls, v: str) -> str:
+        if v.startswith("http://") or v.startswith("https://"):
+            raise ValueError("This looks like a URL. Please use the /topics endpoint instead.")
+        if len(v) < 3:
+            raise ValueError("Query must be at least 3 characters.")
+        if len(v) > 200:
+            raise ValueError("Query must be at most 200 characters.")
+        return v
+
+
 class TopicAnalyzeResponse(BaseModel):
     proposals: list[TopicProposal]
     source_language: str
 
 
 class TopicConfirmRequest(BaseModel):
-    url: str
+    source: str
     proposal_index: int = 0
     check_interval_days: int | None = None
 

@@ -19,13 +19,16 @@ from app.schemas.topic import (
     TopicAnalyzeResponse,
     TopicConfirmRequest,
     TopicDetailResponse,
+    TopicManualRequest,
     TopicProposal,
     TopicResponse,
     TopicUpdateRequest,
 )
 from app.services.article_analyzer import (
     extract_topic_proposals,
+    extract_topic_proposals_from_query,
     fetch_article_content,
+    fetch_query_content,
 )
 from app.services.topic_checker import check_topic
 
@@ -75,6 +78,45 @@ async def analyze_url(
     return TopicAnalyzeResponse(proposals=proposals, source_language=source_language)
 
 
+@router.post("/manual", response_model=TopicAnalyzeResponse)
+async def analyze_query(
+    body: TopicManualRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Search for a user query and return topic proposals (with keywords + facts) for user to choose from."""
+    try:
+        extracted_results = await fetch_query_content(body.query)
+    except Exception as e:
+        logger.error(f"fetch_query_content failed for '{body.query}': {e}\n{traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Failed to fetch content for query",
+            headers={"X-Error-Code": "FETCH_FAILED"},
+        )
+
+    try:
+        result = await extract_topic_proposals_from_query(body.query, extracted_results)
+    except Exception as e:
+        logger.error(f"extract_topic_proposals_from_query failed for '{body.query}': {e}\n{traceback.format_exc()}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to analyze query",
+            headers={"X-Error-Code": "ANALYSIS_FAILED"},
+        )
+
+    proposals = [TopicProposal(**p) for p in result.get("proposals", [])]
+    source_language = result.get("source_language", "en")
+
+    cache_key = (current_user.id, body.query)
+    _proposals_cache[cache_key] = {
+        "proposals": proposals,
+        "source_language": source_language,
+        "expires_at": datetime.now(timezone.utc) + timedelta(minutes=CACHE_TTL_MINUTES),
+    }
+
+    return TopicAnalyzeResponse(proposals=proposals, source_language=source_language)
+
+
 @router.post("/confirm", response_model=TopicResponse, status_code=status.HTTP_201_CREATED)
 async def confirm_topic(
     body: TopicConfirmRequest,
@@ -82,14 +124,14 @@ async def confirm_topic(
     db: Session = Depends(get_db),
 ):
     """Confirm a cached proposal by index and save Topic + Facts."""
-    cache_key = (current_user.id, body.url)
+    cache_key = (current_user.id, body.source)
     cached = _proposals_cache.get(cache_key)
 
     if not cached or cached["expires_at"] < datetime.now(timezone.utc):
         _proposals_cache.pop(cache_key, None)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Proposals expired or not found. Please analyze the URL again.",
+            detail="Proposals expired or not found. Please analyze again.",
             headers={"X-Error-Code": "PROPOSALS_EXPIRED"},
         )
 
@@ -107,7 +149,7 @@ async def confirm_topic(
 
     topic = Topic(
         user_id=current_user.id,
-        source_url=body.url,
+        source_url=body.source,
         title=proposal.title,
         description=proposal.description,
         search_keywords=proposal.search_keywords,
@@ -123,8 +165,8 @@ async def confirm_topic(
         fact = Fact(
             topic_id=topic.id,
             content=fact_content,
-            source_url=body.url,
-            source_title="Original article",
+            source_url=body.source,
+            source_title="Initial source",
             is_initial=True,
         )
         db.add(fact)
