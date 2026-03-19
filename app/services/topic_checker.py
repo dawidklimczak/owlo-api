@@ -27,15 +27,18 @@ def _load_prompt(name: str) -> str:
 
 
 @retry(stop=stop_after_attempt(2), wait=wait_exponential(multiplier=1, min=2, max=8))
-async def _tavily_search(query: str) -> list[dict]:
+async def _tavily_search(query: str, start_date: str | None = None) -> list[dict]:
+    payload: dict = {
+        "query": query,
+        "max_results": settings.MAX_SEARCH_RESULTS_PER_TOPIC,
+        "search_depth": "basic",
+    }
+    if start_date is not None:
+        payload["start_date"] = start_date
     async with httpx.AsyncClient(timeout=30) as http:
         response = await http.post(
             "https://api.tavily.com/search",
-            json={
-                "query": query,
-                "max_results": settings.MAX_SEARCH_RESULTS_PER_TOPIC,
-                "search_depth": "basic",
-            },
+            json=payload,
             headers={"Authorization": f"Bearer {settings.TAVILY_API_KEY}"},
         )
         response.raise_for_status()
@@ -99,9 +102,12 @@ async def check_topic(topic: Topic, db: Session) -> int:
     search_queries = topic.search_keywords[:3] if len(topic.search_keywords) > 3 else topic.search_keywords
     all_results: list[dict] = []
 
+    reference_dt = topic.last_checked_at if topic.last_checked_at is not None else topic.created_at
+    start_date = (reference_dt - timedelta(days=1)).strftime("%Y-%m-%d")
+
     for query in search_queries:
         try:
-            results = await _tavily_search(query)
+            results = await _tavily_search(query, start_date=start_date)
             all_results.extend(results)
         except Exception as e:
             logger.error("Tavily search failed for query '%s': %s", query, e)
