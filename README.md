@@ -1,5 +1,7 @@
 # Owlo API
 
+> **Work in progress.** This is a personal side project, not a finished or maintained product — expect rough edges and missing pieces.
+
 Backend for Owlo — a service that tracks how a specific news story develops over time, instead of dumping every new article about a broad topic into your feed.
 
 ## The idea
